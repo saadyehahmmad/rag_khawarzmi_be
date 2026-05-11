@@ -79,8 +79,9 @@ USER rag
 EXPOSE 8000
 
 # Health check: liveness probe (light — does not load embeddings).
+# Reads PORT env var so it works on Render (PORT=10000) and locally (PORT=8000).
 HEALTHCHECK --interval=30s --timeout=5s --start-period=60s --retries=3 \
-    CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')" || exit 1
+    CMD python -c "import urllib.request, os; urllib.request.urlopen('http://localhost:' + os.getenv('PORT','8000') + '/health')" || exit 1
 
 # Use start.py so $PORT is respected and workers=1 avoids OOM on low-memory hosts.
 # For multi-worker production hosts set UVICORN_WORKERS env var and override CMD.
