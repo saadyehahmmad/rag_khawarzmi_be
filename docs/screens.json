@@ -1,0 +1,68 @@
+﻿{
+  "_comment": "Relational graph. 'images' is the central registry keyed by node ID, each entry holds language-keyed file paths matching the docs/images/{system}/{lang}/ folder structure. 'flows' reference image IDs via ordered steps — the same image can appear as step 1 in one flow and step 5 in another.",
+
+  "images": {
+    "login-page": {
+      "file": {
+        "en": "designer/en/login-page.png",
+        "ar": "designer/ar/login-page.png"
+      },
+      "caption": "Login page"
+    },
+    "change-profile-setting-step-1": {
+      "file": {
+        "en": "designer/en/change-profile-setting-step-1.png",
+        "ar": "designer/ar/change-profile-setting-step-1.png"
+      },
+      "caption": "Change profile settings - Step 1"
+    },
+    "change-profile-setting-step-2": {
+      "file": {
+        "en": "designer/en/change-profile-setting-step-2.png",
+        "ar": "designer/ar/change-profile-setting-step-2.png"
+      },
+      "caption": "Change profile settings - Step 2"
+    },
+    "change-profile-setting-step-3-4": {
+      "file": {
+        "en": "designer/en/change-profile-setting-step-3-4.png",
+        "ar": "designer/ar/change-profile-setting-step-3-4.png"
+      },
+      "caption": "Change profile settings - Steps 3 & 4"
+    },
+    "change-language-system": {
+      "file": {
+        "en": "designer/en/change-language-system.png",
+        "ar": "designer/ar/change-language-system.png"
+      },
+      "caption": "Change language system menu"
+    }
+  },
+
+  "flows": [
+    {
+      "id": "edit-user-profile",
+      "system": "designer",
+      "desc": {
+        "en": "Steps to edit account information in the Survey Designer system.",
+        "ar": "خطوات تعديل معلومات الحساب في نظام مصمم الاستبيانات."
+      },
+      "steps": [
+        { "step": 1, "image": "change-profile-setting-step-1", "label": "Open account settings" },
+        { "step": 2, "image": "change-profile-setting-step-2", "label": "Edit account information fields" },
+        { "step": 3, "image": "change-profile-setting-step-3-4", "label": "Save changes to update account information" }
+      ]
+    },
+    {
+      "id": "change-language",
+      "system": "designer",
+      "desc": {
+        "en": "Steps to change the language in the Survey Designer system.",
+        "ar": "خطوات تغيير اللغة في نظام مصمم الاستبيانات."
+      },
+      "steps": [
+        { "step": 1, "image": "change-language-system", "label": "Open language settings" }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,463 @@
+{
+  "version": 2,
+  "description": "Golden cases for offline RAG eval — covers routing, Arabic, off-topic, and multi-turn intent.",
+  "cases": [
+    {
+      "id": "designer_skip_logic_en",
+      "question": "How do I add skip logic to a question in the survey designer?",
+      "keywords_any": ["skip", "logic", "condition", "question", "branch"],
+      "keywords_all": [],
+      "expect_system": "designer",
+      "expect_fallback": false,
+      "min_citations": 0
+    },
+    {
+      "id": "designer_publish_survey_en",
+      "question": "How do I publish a survey in the designer?",
+      "keywords_any": ["publish", "survey", "designer", "deploy", "activate"],
+      "keywords_all": [],
+      "expect_system": "designer",
+      "expect_fallback": false,
+      "min_citations": 0
+    },
+    {
+      "id": "designer_question_types_en",
+      "question": "What types of questions can I add in the survey designer?",
+      "keywords_any": ["type", "question", "text", "multiple", "choice", "scale"],
+      "keywords_all": [],
+      "expect_system": "designer",
+      "expect_fallback": false,
+      "min_citations": 0
+    },
+    {
+      "id": "designer_what_is_ar",
+      "question": "ما هو نظام المصمم في منصة الخوارزمي؟",
+      "keywords_any": ["مصمم", "استبيان", "designer", "survey", "نظام"],
+      "keywords_all": [],
+      "expect_system": "designer",
+      "expect_fallback": false,
+      "min_citations": 0
+    },
+    {
+      "id": "designer_skip_ar",
+      "question": "كيف أضيف منطق التخطي إلى سؤال في المصمم؟",
+      "keywords_any": ["تخطي", "skip", "منطق", "سؤال", "شرط"],
+      "keywords_all": [],
+      "expect_system": "designer",
+      "expect_fallback": false,
+      "min_citations": 0
+    },
+    {
+      "id": "runtime_offline_en",
+      "question": "How does offline mode work on tablets during field data collection?",
+      "keywords_any": ["offline", "tablet", "sync", "field", "data", "collect"],
+      "keywords_all": [],
+      "expect_system": "runtime",
+      "expect_fallback": false,
+      "min_citations": 0
+    },
+    {
+      "id": "runtime_sync_en",
+      "question": "How does data synchronization work in the runtime system?",
+      "keywords_any": ["sync", "data", "runtime", "server", "upload"],
+      "keywords_all": [],
+      "expect_system": "runtime",
+      "expect_fallback": false,
+      "min_citations": 0
+    },
+    {
+      "id": "runtime_what_is_ar",
+      "question": "ما هو نظام التشغيل في منصة الخوارزمي؟",
+      "keywords_any": ["تشغيل", "runtime", "جمع", "بيانات", "ميداني"],
+      "keywords_all": [],
+      "expect_system": "runtime",
+      "expect_fallback": false,
+      "min_citations": 0
+    },
+    {
+      "id": "callcenter_interviewer_en",
+      "question": "How does an interviewer use the call center system to conduct a survey?",
+      "keywords_any": ["interviewer", "call", "center", "conduct", "survey", "phone"],
+      "keywords_all": [],
+      "expect_system": "callcenter",
+      "expect_fallback": false,
+      "min_citations": 0
+    },
+    {
+      "id": "callcenter_quota_en",
+      "question": "How is quota management handled in the call center system?",
+      "keywords_any": ["quota", "manage", "callcenter", "target", "sample"],
+      "keywords_all": [],
+      "expect_system": "callcenter",
+      "expect_fallback": false,
+      "min_citations": 0
+    },
+    {
+      "id": "admin_roles_en",
+      "question": "How are user roles and permissions managed in the admin system?",
+      "keywords_any": ["role", "permission", "admin", "user", "access"],
+      "keywords_all": [],
+      "expect_system": "admin",
+      "expect_fallback": false,
+      "min_citations": 0
+    },
+    {
+      "id": "admin_organization_en",
+      "question": "How do I manage organizations in the admin panel?",
+      "keywords_any": ["organization", "admin", "manage", "panel", "create"],
+      "keywords_all": [],
+      "expect_system": "admin",
+      "expect_fallback": false,
+      "min_citations": 0
+    },
+    {
+      "id": "admin_users_ar",
+      "question": "كيف يتم إدارة المستخدمين في لوحة الإدارة؟",
+      "keywords_any": ["مستخدم", "إدارة", "admin", "صلاحية", "دور"],
+      "keywords_all": [],
+      "expect_system": "admin",
+      "expect_fallback": false,
+      "min_citations": 0
+    },
+    {
+      "id": "off_topic_food_ar",
+      "question": "كيفية تحضير الهريسة",
+      "keywords_any": [],
+      "keywords_all": [],
+      "expect_system": "none",
+      "expect_fallback": true,
+      "min_citations": 0
+    },
+    {
+      "id": "off_topic_geography_en",
+      "question": "What is the capital of France?",
+      "keywords_any": [],
+      "keywords_all": [],
+      "expect_fallback": true,
+      "min_citations": 0
+    },
+    {
+      "id": "off_topic_sports_en",
+      "question": "Who won the World Cup in 2022?",
+      "keywords_any": [],
+      "keywords_all": [],
+      "expect_fallback": true,
+      "min_citations": 0
+    },
+    {
+      "id": "off_topic_coding_en",
+      "question": "How do I sort a list in Python?",
+      "keywords_any": [],
+      "keywords_all": [],
+      "expect_fallback": true,
+      "min_citations": 0
+    },
+    {
+      "id": "off_topic_weather_ar",
+      "question": "ما هو الطقس في قطر غداً؟",
+      "keywords_any": [],
+      "keywords_all": [],
+      "expect_fallback": true,
+      "min_citations": 0
+    },
+    {
+      "id": "mixed_lang_designer",
+      "question": "How do I use skip logic في المصمم؟",
+      "keywords_any": ["skip", "logic", "تخطي", "designer", "question"],
+      "keywords_all": [],
+      "expect_system": "designer",
+      "expect_fallback": false,
+      "min_citations": 0
+    },
+    {
+      "id": "platform_overview_en",
+      "question": "What is the Al-Khwarizmi platform and what systems does it include?",
+      "keywords_any": ["platform", "system", "designer", "runtime", "survey", "statistical"],
+      "keywords_all": [],
+      "expect_fallback": false,
+      "min_citations": 0
+    },
+    {
+      "id": "platform_overview_ar",
+      "question": "ما هي منصة الخوارزمي وما هي الأنظمة التي تتضمنها؟",
+      "keywords_any": ["منصة", "نظام", "الخوارزمي", "استبيان", "إحصاء"],
+      "keywords_all": [],
+      "expect_fallback": false,
+      "min_citations": 0
+    },
+
+    {
+      "id": "designer_create_survey_ar",
+      "question": "كيف اعمل استمارة بالخوارزمي",
+      "keywords_any": ["استمارة", "استبيان", "إنشاء", "مصمم", "designer", "جديد", "create"],
+      "keywords_all": [],
+      "expect_system": "designer",
+      "expect_fallback": false,
+      "min_citations": 0
+    },
+    {
+      "id": "designer_assign_survey_en",
+      "question": "How do I assign a survey to users in the designer?",
+      "keywords_any": ["assign", "survey", "user", "control panel", "group"],
+      "keywords_all": [],
+      "expect_system": "designer",
+      "expect_fallback": false,
+      "min_citations": 0
+    },
+    {
+      "id": "designer_assign_survey_ar",
+      "question": "كيف أوزع الاستمارة على المستخدمين في المصمم؟",
+      "keywords_any": ["توزيع", "استمارة", "مستخدم", "تعيين", "مجموعة"],
+      "keywords_all": [],
+      "expect_system": "designer",
+      "expect_fallback": false,
+      "min_citations": 0
+    },
+    {
+      "id": "designer_upload_sample_en",
+      "question": "How do I upload a survey sample in the designer?",
+      "keywords_any": ["upload", "sample", "file", "csv", "import"],
+      "keywords_all": [],
+      "expect_system": "designer",
+      "expect_fallback": false,
+      "min_citations": 0
+    },
+    {
+      "id": "designer_template_en",
+      "question": "How do I create a survey from a template?",
+      "keywords_any": ["template", "copy", "duplicate", "survey"],
+      "keywords_all": [],
+      "expect_system": "designer",
+      "expect_fallback": false,
+      "min_citations": 0
+    },
+    {
+      "id": "designer_change_language_en",
+      "question": "How do I change the language in the Survey Designer?",
+      "keywords_any": ["language", "arabic", "english", "Languages"],
+      "keywords_all": [],
+      "expect_system": "designer",
+      "expect_fallback": false,
+      "min_citations": 0
+    },
+    {
+      "id": "designer_change_language_ar",
+      "question": "كيف أغير لغة النظام في مصمم الاستمارات؟",
+      "keywords_any": ["لغة", "عربي", "إنجليزي", "language", "تغيير"],
+      "keywords_all": [],
+      "expect_system": "designer",
+      "expect_fallback": false,
+      "min_citations": 0
+    },
+    {
+      "id": "designer_reset_password_en",
+      "question": "How do I reset my password in the Survey Designer?",
+      "keywords_any": ["password", "reset", "forgot", "email"],
+      "keywords_all": [],
+      "expect_system": "designer",
+      "expect_fallback": false,
+      "min_citations": 0
+    },
+
+    {
+      "id": "admin_create_workgroup_en",
+      "question": "How do I create a workgroup in the Field Management system?",
+      "keywords_any": ["workgroup", "job group", "team", "create", "field"],
+      "keywords_all": [],
+      "expect_system": "admin",
+      "expect_fallback": false,
+      "min_citations": 0
+    },
+    {
+      "id": "admin_create_workgroup_ar",
+      "question": "كيف أنشئ مجموعة عمل في نظام إدارة العمل الميداني؟",
+      "keywords_any": ["مجموعة", "عمل", "ميداني", "workgroup", "إنشاء"],
+      "keywords_all": [],
+      "expect_system": "admin",
+      "expect_fallback": false,
+      "min_citations": 0
+    },
+    {
+      "id": "admin_add_users_en",
+      "question": "How do I add users to a survey job group in Field Management?",
+      "keywords_any": ["add", "user", "job group", "field", "role"],
+      "keywords_all": [],
+      "expect_system": "admin",
+      "expect_fallback": false,
+      "min_citations": 0
+    },
+    {
+      "id": "admin_assign_tasks_map_en",
+      "question": "How do I assign tasks to field researchers using the map?",
+      "keywords_any": ["assign", "task", "map", "field", "researcher"],
+      "keywords_all": [],
+      "expect_system": "admin",
+      "expect_fallback": false,
+      "min_citations": 0
+    },
+    {
+      "id": "admin_edit_role_ar",
+      "question": "كيف أعدّل دور المستخدم في نظام إدارة العمل الميداني؟",
+      "keywords_any": ["دور", "مستخدم", "تعديل", "صلاحية", "role"],
+      "keywords_all": [],
+      "expect_system": "admin",
+      "expect_fallback": false,
+      "min_citations": 0
+    },
+    {
+      "id": "admin_tracking_en",
+      "question": "How do I track field researchers' location and progress?",
+      "keywords_any": ["track", "tracking", "gps", "location", "progress", "geofencing"],
+      "keywords_all": [],
+      "expect_system": "admin",
+      "expect_fallback": false,
+      "min_citations": 0
+    },
+    {
+      "id": "admin_data_sync_log_en",
+      "question": "How do I view the data sync log in Field Management?",
+      "keywords_any": ["sync", "log", "data transfer", "transfer log"],
+      "keywords_all": [],
+      "expect_system": "admin",
+      "expect_fallback": false,
+      "min_citations": 0
+    },
+    {
+      "id": "admin_gis_layers_en",
+      "question": "How do I add a new GIS map or geographic layer in Field Management?",
+      "keywords_any": ["gis", "map", "layer", "geographic", "base map"],
+      "keywords_all": [],
+      "expect_system": "admin",
+      "expect_fallback": false,
+      "min_citations": 0
+    },
+
+    {
+      "id": "callcenter_create_queue_en",
+      "question": "How do I create a new queue in the Call Center system?",
+      "keywords_any": ["queue", "create", "new", "call center"],
+      "keywords_all": [],
+      "expect_system": "callcenter",
+      "expect_fallback": false,
+      "min_citations": 0
+    },
+    {
+      "id": "callcenter_create_queue_ar",
+      "question": "كيف أنشئ قائمة انتظار جديدة في نظام مركز الاتصال؟",
+      "keywords_any": ["قائمة انتظار", "queue", "إنشاء", "مركز الاتصال"],
+      "keywords_all": [],
+      "expect_system": "callcenter",
+      "expect_fallback": false,
+      "min_citations": 0
+    },
+    {
+      "id": "callcenter_pull_unit_en",
+      "question": "How do I pull a survey unit from the Call Center?",
+      "keywords_any": ["pull", "unit", "queue", "call", "retrieve"],
+      "keywords_all": [],
+      "expect_system": "callcenter",
+      "expect_fallback": false,
+      "min_citations": 0
+    },
+    {
+      "id": "callcenter_add_call_en",
+      "question": "How do I add a call record in the Call Center system?",
+      "keywords_any": ["add", "call", "record", "log", "task"],
+      "keywords_all": [],
+      "expect_system": "callcenter",
+      "expect_fallback": false,
+      "min_citations": 0
+    },
+    {
+      "id": "callcenter_distribute_workload_en",
+      "question": "How do I distribute workload among call center agents?",
+      "keywords_any": ["distribute", "workload", "agent", "balance", "assign"],
+      "keywords_all": [],
+      "expect_system": "callcenter",
+      "expect_fallback": false,
+      "min_citations": 0
+    },
+    {
+      "id": "callcenter_task_log_en",
+      "question": "How do I view and filter the task log in the Call Center?",
+      "keywords_any": ["task log", "log", "filter", "call", "history"],
+      "keywords_all": [],
+      "expect_system": "callcenter",
+      "expect_fallback": false,
+      "min_citations": 0
+    },
+    {
+      "id": "callcenter_send_notification_en",
+      "question": "How do I send a notification to a user in the Call Center system?",
+      "keywords_any": ["notification", "send", "user", "message"],
+      "keywords_all": [],
+      "expect_system": "callcenter",
+      "expect_fallback": false,
+      "min_citations": 0
+    },
+
+    {
+      "id": "alias_builder_ar",
+      "question": "كيف أستخدم البلدر؟",
+      "keywords_any": ["مصمم", "استمارة", "designer", "builder", "إنشاء"],
+      "keywords_all": [],
+      "expect_system": "designer",
+      "expect_fallback": false,
+      "min_citations": 0
+    },
+    {
+      "id": "alias_runtime_ar",
+      "question": "كيف أشغّل الاستمارة على الجهاز اللوحي؟",
+      "keywords_any": ["تشغيل", "استمارة", "جهاز", "runtime", "tablet"],
+      "keywords_all": [],
+      "expect_system": "runtime",
+      "expect_fallback": false,
+      "min_citations": 0
+    },
+    {
+      "id": "alias_funtime_en",
+      "question": "How does funtime work?",
+      "keywords_any": ["runtime", "form", "fill", "player", "survey"],
+      "keywords_all": [],
+      "expect_system": "runtime",
+      "expect_fallback": false,
+      "min_citations": 0
+    },
+    {
+      "id": "alias_kol_center_ar",
+      "question": "كيف أعمل على وحدة الاتصال؟",
+      "keywords_any": ["مركز الاتصال", "callcenter", "اتصال", "queue", "call"],
+      "keywords_all": [],
+      "expect_system": "callcenter",
+      "expect_fallback": false,
+      "min_citations": 0
+    },
+    {
+      "id": "alias_field_mgmt_ar",
+      "question": "كيف أوزع الأدوار في الإدارة؟",
+      "keywords_any": ["أدوار", "إدارة", "admin", "field", "مستخدم", "صلاحية"],
+      "keywords_all": [],
+      "expect_system": "admin",
+      "expect_fallback": false,
+      "min_citations": 0
+    },
+
+    {
+      "id": "wrong_system_form_not_loading_en",
+      "question": "My form is not loading on the tablet",
+      "keywords_any": ["runtime", "form", "load", "tablet", "publish", "assign"],
+      "keywords_all": [],
+      "expect_system": "runtime",
+      "expect_fallback": false,
+      "min_citations": 0
+    },
+    {
+      "id": "wrong_system_role_in_designer_en",
+      "question": "How do I add a user role inside the survey builder?",
+      "keywords_any": ["role", "user", "permission", "control panel", "admin", "field management"],
+      "keywords_all": [],
+      "expect_fallback": false,
+      "min_citations": 0
+    }
+  ]
+}

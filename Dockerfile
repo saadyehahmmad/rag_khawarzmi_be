@@ -1,0 +1,72 @@
+# --------------------------------------------------------------------------- #
+# Al-Khwarizmi RAG API — multi-stage Dockerfile
+#
+# Stage 1 (builder): install Python dependencies into /install
+# Stage 2 (runtime): copy only the installed packages + app code — no build tools
+#
+# Build:
+#   docker build -t alkhwarizmi-rag:latest .
+#
+# Run (with .env file):
+#   docker run --env-file .env -p 8000:8000 alkhwarizmi-rag:latest
+#
+# Run with GPU (requires nvidia-docker2):
+#   docker run --gpus all --env-file .env -p 8000:8000 alkhwarizmi-rag:latest
+# --------------------------------------------------------------------------- #
+
+# ---- Stage 1: builder -------------------------------------------------------
+FROM python:3.11-slim AS builder
+
+WORKDIR /build
+
+# System deps needed to build wheels (chromadb, tokenizers, etc.)
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        build-essential \
+        gcc \
+        g++ \
+        git \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY requirements.txt .
+RUN pip install --upgrade pip \
+ && pip install --prefix=/install --no-cache-dir -r requirements.txt
+
+
+# ---- Stage 2: runtime -------------------------------------------------------
+FROM python:3.11-slim AS runtime
+
+# Non-root user for security.
+RUN addgroup --system rag && adduser --system --ingroup rag rag
+
+WORKDIR /app
+
+# Copy installed packages from builder.
+COPY --from=builder /install /usr/local
+
+# Copy application source.
+COPY agent/       agent/
+COPY api/         api/
+COPY ingestion/   ingestion/
+COPY eval/        eval/
+
+# Runtime directories owned by the non-root user.
+RUN mkdir -p vector_stores logs memory \
+ && chown -R rag:rag /app
+
+USER rag
+
+# Expose API port (configure via API_PORT env var — default 8000).
+EXPOSE 8000
+
+# Health check: liveness probe (light — does not load embeddings).
+HEALTHCHECK --interval=30s --timeout=5s --start-period=60s --retries=3 \
+    CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')" || exit 1
+
+# Default: 4 workers, no --reload, uvloop + httptools for production throughput.
+# Override CMD at runtime for dev: --reload --workers 1
+CMD ["python", "-m", "uvicorn", "api.main:app", \
+     "--host", "0.0.0.0", \
+     "--port", "8000", \
+     "--workers", "4", \
+     "--loop", "uvloop", \
+     "--http", "httptools"]

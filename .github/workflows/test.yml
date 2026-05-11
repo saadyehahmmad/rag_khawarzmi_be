@@ -1,0 +1,86 @@
+name: CI
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+    branches: ["**"]
+
+jobs:
+  # ── Python backend ──────────────────────────────────────────────────────────
+  backend:
+    name: Backend tests
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      # Fast unit tests — governance, language detection, fallback logic.
+      # These never call the LLM so they run without ANTHROPIC_API_KEY.
+      - name: Run unit tests
+        run: pytest tests/ -v --tb=short -m "not llm"
+
+      # Full integration tests (graph invocation against the live Anthropic API).
+      # Skipped automatically when the secret is not set (e.g. on fork PRs).
+      - name: Run integration tests
+        if: ${{ secrets.ANTHROPIC_API_KEY != '' }}
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          EMBEDDING_MODEL: intfloat/multilingual-e5-large
+          LLM_MODEL: claude-haiku-4-20250514
+          VECTOR_STORE_PATH: ./vector_stores
+          LOG_PATH: ./logs
+          MEMORY_PATH: ./memory
+        run: pytest tests/ -v --tb=short -m "llm"
+
+      # Offline golden-set evaluation (requires API key + pre-built vector stores).
+      # Runs only on the main branch to avoid burning quota on every feature branch.
+      - name: Run golden-set evaluation
+        if: >
+          github.ref == 'refs/heads/main' &&
+          secrets.ANTHROPIC_API_KEY != ''
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          EMBEDDING_MODEL: intfloat/multilingual-e5-large
+          LLM_MODEL: claude-haiku-4-20250514
+          VECTOR_STORE_PATH: ./vector_stores
+          LOG_PATH: ./logs
+          MEMORY_PATH: ./memory
+        run: python eval/run_eval.py
+
+  # ── Angular frontend ────────────────────────────────────────────────────────
+  frontend:
+    name: Frontend tests
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: RAG_FE
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node.js 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: RAG_FE/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      # Headless Chrome is pre-installed on ubuntu-latest GitHub runners.
+      - name: Run Angular unit tests
+        run: npx ng test --watch=false --browsers=ChromeHeadless
+
+      - name: Build production bundle
+        run: npx ng build --configuration=production

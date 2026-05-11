@@ -1,0 +1,72 @@
+# Al-Khwarizmi RAG — docker-compose (dev + optional Redis)
+#
+# Start everything:
+#   docker compose up --build
+#
+# Start only the API (no Redis, file-based thread memory):
+#   docker compose up --build rag-api
+#
+# Run ingestion inside the same image:
+#   docker compose run --rm rag-api python -m ingestion
+#
+# Notes:
+#   - Set ANTHROPIC_API_KEY in .env before starting (see .env.example).
+#   - vector_stores/ and memory/ are bind-mounted for persistence across restarts.
+#   - Remove `depends_on: redis` if you don't need multi-worker thread sharing.
+
+version: "3.9"
+
+services:
+
+  # ─────────────────────────────────────────────────────────────────────────
+  # RAG API
+  # ─────────────────────────────────────────────────────────────────────────
+  rag-api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: alkhwarizmi-rag:latest
+    container_name: alkhwarizmi-rag-api
+    restart: unless-stopped
+    ports:
+      - "${API_PORT:-8000}:8000"
+    env_file:
+      - .env
+    environment:
+      # Override for container networking — Redis service name as host.
+      REDIS_URL: "redis://redis:6379/0"
+    volumes:
+      # Persist Chroma vector stores and thread memory on the host.
+      - ./vector_stores:/app/vector_stores
+      - ./memory:/app/memory
+      - ./logs:/app/logs
+      - ./docs:/app/docs
+    depends_on:
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c",
+             "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 30s
+      timeout: 5s
+      start_period: 90s
+      retries: 3
+
+  # ─────────────────────────────────────────────────────────────────────────
+  # Redis — thread memory backend (multi-worker safe, survives restarts)
+  # ─────────────────────────────────────────────────────────────────────────
+  redis:
+    image: redis:7-alpine
+    container_name: alkhwarizmi-redis
+    restart: unless-stopped
+    command: redis-server --save 60 1 --loglevel warning
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+
+volumes:
+  redis_data:
