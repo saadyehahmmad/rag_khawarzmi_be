@@ -48,6 +48,7 @@ COPY agent/       agent/
 COPY api/         api/
 COPY ingestion/   ingestion/
 COPY eval/        eval/
+COPY start.py     start.py
 
 # Runtime directories owned by the non-root user.
 RUN mkdir -p vector_stores logs memory \
@@ -62,11 +63,6 @@ EXPOSE 8000
 HEALTHCHECK --interval=30s --timeout=5s --start-period=60s --retries=3 \
     CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')" || exit 1
 
-# Default: 4 workers, no --reload, uvloop + httptools for production throughput.
-# Override CMD at runtime for dev: --reload --workers 1
-CMD ["python", "-m", "uvicorn", "api.main:app", \
-     "--host", "0.0.0.0", \
-     "--port", "8000", \
-     "--workers", "4", \
-     "--loop", "uvloop", \
-     "--http", "httptools"]
+# Use start.py so $PORT is respected and workers=1 avoids OOM on low-memory hosts.
+# For multi-worker production hosts set UVICORN_WORKERS env var and override CMD.
+CMD ["python", "start.py", "--no-reload"]

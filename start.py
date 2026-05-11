@@ -30,11 +30,15 @@ import uvicorn
 if __name__ == "__main__":
     _reload = "--no-reload" not in sys.argv
     port = int(os.getenv("PORT", "8000"))
+    # Default to 1 worker (safe for memory-constrained hosts like Render free tier).
+    # Set UVICORN_WORKERS=4 on hosts with ≥4 GB RAM.
+    workers = int(os.getenv("UVICORN_WORKERS", "1"))
 
     uvicorn.run(
         "api.main:app",
         host="0.0.0.0",
         port=port,
+        workers=workers,
         reload=_reload,
         # ── Windows socket-buffer mitigations (WinError 10055) ──────────
         timeout_keep_alive=5,   # close idle keep-alive connections after 5 s
