@@ -53,7 +53,7 @@ def get_embeddings() -> HuggingFaceEmbeddings:
     if _embeddings is None:
         _embeddings = HuggingFaceEmbeddings(
             model_name=EMBEDDING_MODEL,
-            model_kwargs={"device": "cpu", "local_files_only": True},
+            model_kwargs={"device": "cpu"},
             encode_kwargs={"normalize_embeddings": True},
         )
     return _embeddings
