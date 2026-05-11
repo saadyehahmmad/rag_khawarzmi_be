@@ -36,14 +36,7 @@ RUN pip install --upgrade pip \
 COPY agent/env_utils.py /tmp/env_utils.py
 RUN PYTHONPATH=/install/lib/python3.11/site-packages \
     HF_HOME=/opt/hf-cache \
-    python -c "
-import os, sys
-sys.path.insert(0, '/install/lib/python3.11/site-packages')
-model = os.getenv('EMBEDDING_MODEL', 'intfloat/multilingual-e5-large')
-from sentence_transformers import SentenceTransformer
-SentenceTransformer(model)
-print('Embedding model cached:', model)
-"
+    python -c "import os, sys; sys.path.insert(0, '/install/lib/python3.11/site-packages'); model = os.getenv('EMBEDDING_MODEL', 'intfloat/multilingual-e5-large'); from sentence_transformers import SentenceTransformer; SentenceTransformer(model); print('Embedding model cached:', model)"
 
 
 # ---- Stage 2: runtime -------------------------------------------------------
