@@ -33,10 +33,13 @@ RUN pip install --upgrade pip \
 
 # Pre-download the embedding model so workers never fetch at runtime.
 # Store in /opt/hf-cache so it can be copied to a world-readable location.
+# Default: multilingual-e5-small (~120 MB RAM, fits Render 512 MB free tier).
+# Override EMBEDDING_MODEL build-arg for larger instances.
+ARG EMBEDDING_MODEL=intfloat/multilingual-e5-small
 COPY agent/env_utils.py /tmp/env_utils.py
 RUN PYTHONPATH=/install/lib/python3.11/site-packages \
     HF_HOME=/opt/hf-cache \
-    python -c "import os, sys; sys.path.insert(0, '/install/lib/python3.11/site-packages'); model = os.getenv('EMBEDDING_MODEL', 'intfloat/multilingual-e5-large'); from sentence_transformers import SentenceTransformer; SentenceTransformer(model); print('Embedding model cached:', model)"
+    python -c "import sys; sys.path.insert(0, '/install/lib/python3.11/site-packages'); from sentence_transformers import SentenceTransformer; import os; model = os.getenv('EMBEDDING_MODEL', 'intfloat/multilingual-e5-small'); SentenceTransformer(model); print('Embedding model cached:', model)"
 
 
 # ---- Stage 2: runtime -------------------------------------------------------

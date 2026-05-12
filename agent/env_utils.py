@@ -13,7 +13,9 @@ import os
 _RE_TRUTH: frozenset[str] = frozenset({"1", "true", "yes"})
 
 # Single source of truth for the embedding model name used by ingestion, agent, and health checks.
-EMBEDDING_MODEL: str = os.getenv("EMBEDDING_MODEL", "intfloat/multilingual-e5-large")
+# Default is the *small* variant (~120 MB RAM) so the API fits inside Render's 512 MB free tier.
+# Override with EMBEDDING_MODEL=intfloat/multilingual-e5-large on instances with ≥2 GB RAM.
+EMBEDDING_MODEL: str = os.getenv("EMBEDDING_MODEL", "intfloat/multilingual-e5-small")
 
 
 def env_bool(name: str, default: bool = False) -> bool:

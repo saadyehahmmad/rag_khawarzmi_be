@@ -91,7 +91,9 @@ async def _lifespan(app: FastAPI):
         )
 
     get_compiled_graph()
-    get_embeddings()  # Pre-warm embeddings to avoid cold-start cost on the first request.
+    # Embedding model is loaded lazily on the first request to avoid OOM on
+    # memory-constrained hosts (e.g. Render free tier, 512 MB).
+    # Remove this comment and call get_embeddings() here only on instances with ≥2 GB RAM.
     logger.info("API startup complete — ready to serve requests")
     yield
     logger.info("API shutdown complete")
