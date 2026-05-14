@@ -24,6 +24,7 @@
 8. [Operations Guide](#8-operations-guide)
 9. [Directory Structure](#9-directory-structure)
 10. [Dependency Map](#10-dependency-map)
+11. [Product Swap Guide](#11-product-swap-guide)
 
 ---
 
@@ -56,37 +57,62 @@ Each system has an isolated Chroma vector store so retrieval is always scoped to
 
 ## 2. System Architecture
 
+The codebase is split into **three explicit layers**. Swapping the business product
+requires changing a **single import line** in `api/deps.py`.
+
 ```
-┌────────────────────────────────────────────────────────────────────────┐
-│                           Client (Angular / REST)                      │
-│          POST /chat  (SSE stream)   POST /chat/sync  (JSON)            │
-└──────────────────────────────┬─────────────────────────────────────────┘
+┌──────────────────────────────────────────────┐
+│         LAYER 3: alkawarzmi/                 │  ← swap this import to change the product
+│  prompts · systems · intents · page_map      │
+│  fallback · greeting · prescripts · surveys  │
+├──────────────────────────────────────────────┤
+│         LAYER 2: framework/                  │  ← generic RAG app skeleton
+│  graph · nodes · state · survey_store        │
+│  parameterised via RAGProfile protocol       │
+├──────────────────────────────────────────────┤
+│         LAYER 1: core/                       │  ← reusable services (zero business logic)
+│  retrieval · memory · governance · NLP       │
+│  observability · LLM clients · streaming     │
+└──────────────────────────────────────────────┘
+```
+
+```
+┌──────────────────────────────────────────────────────────────────────────┐
+│                         Client (Angular / REST)                          │
+│         POST /chat (SSE stream)    POST /chat/sync (JSON)                │
+└──────────────────────────────┬───────────────────────────────────────────┘
                                │ HTTP
-┌──────────────────────────────▼─────────────────────────────────────────┐
-│                         FastAPI  (api/main.py)                         │
-│  Middleware: X-Request-ID · CORS · Rate-limit · Governance check       │
-│  Routes: /health  /health/ready  /chat  /chat/sync                     │
-└──────────────────────────────┬─────────────────────────────────────────┘
+┌──────────────────────────────▼───────────────────────────────────────────┐
+│                         FastAPI  (api/main.py)                           │
+│  Middleware: X-Request-ID · CORS · Rate-limit · Governance check         │
+│  Routes: /health  /health/ready  /metrics  /llm  /chat  /chat/sync       │
+└──────────────────────────────┬───────────────────────────────────────────┘
                                │ invoke / astream
-┌──────────────────────────────▼─────────────────────────────────────────┐
-│                      LangGraph Agent  (agent/)                         │
-│                                                                         │
-│  language_detect ──► rewrite_and_route ──► retrieval ──► answer        │
-│                                                       └──► fallback     │
-│                                                                         │
-│  State: AgentState (TypedDict)  ·  Thread memory injected before invoke│
-└──────┬────────────────────────────────────────────────────┬────────────┘
-       │ HuggingFace Embeddings                             │ Anthropic API
-       │ intfloat/multilingual-e5-large                     │ claude-haiku / sonnet
-┌──────▼──────────┐                              ┌──────────▼─────────────┐
-│  Chroma (local) │  4 collections               │   Claude LLM           │
-│  vector_stores/ │  designer / runtime /         │   rewrite+route (1×)   │
-│  admin          │  callcenter / admin           │   answer (1×)          │
-└─────────────────┘                              └────────────────────────┘
-       │
-┌──────▼──────────┐
-│  BM25 (in-proc) │  Lexical re-ranking over dense candidate pool (RRF)
-└─────────────────┘
+┌──────────────────────────────▼───────────────────────────────────────────┐
+│               LangGraph Agent  (framework/graph.py)                      │
+│                                                                          │
+│  language_detect ──► payload_prescripts ──► rewrite_and_route            │
+│                              └── prescripted_answer ──► (stream & done)  │
+│                                        │                                 │
+│                              retrieval ──► answer                        │
+│                                        └──► fallback                     │
+│                                                                          │
+│  State: AgentState (TypedDict)  ·  Thread memory injected before invoke  │
+└──────┬────────────────────────────────────────────────┬──────────────────┘
+       │ HuggingFace Embeddings                         │ LLM API (provider-selectable)
+       │ intfloat/multilingual-e5-large                 │ Anthropic · OpenAI · Gemma · Ollama
+┌──────▼──────────────────────┐              ┌──────────▼──────────────────┐
+│  Catalog vector stores      │  4+ systems  │   Chat model                │
+│  Chroma (local) or Qdrant   │  designer /  │   rewrite+route (1×)        │
+│  vector_stores/<system>/    │  runtime /   │   answer (1×)               │
+│                             │  callcenter /│                             │
+│  Survey stores (Chroma only)│  admin / …   │                             │
+│  vector_stores/surveys/<id>/│              └─────────────────────────────┘
+└──────────────┬──────────────┘
+               │
+┌──────────────▼──────────────┐
+│  BM25 (in-proc, rank_bm25)  │  Lexical re-ranking over dense pool (RRF)
+└─────────────────────────────┘
 ```
 
 ### LLM call budget per request
@@ -94,7 +120,8 @@ Each system has an isolated Chroma vector store so retrieval is always scoped to
 | Scenario | LLM calls | Notes |
 |----------|-----------|-------|
 | On-topic question | **2** | rewrite+route + answer |
-| Off-topic question | **1** | rewrite+route only (system=none → skip retrieval) |
+| Payload prescript match | **0** | Zero-LLM fast path from client context |
+| Off-topic / unsupported script | **1** | rewrite+route only (system=none → skip retrieval) |
 | Fallback (empty retrieval) | **1** | rewrite+route only |
 
 ---
@@ -106,10 +133,11 @@ Each system has an isolated Chroma vector store so retrieval is always scoped to
 **Entry point:** `python -m ingestion` (from project root with venv active)
 
 **Files:** `ingestion/config.py`, `ingestion/documents.py`, `ingestion/chroma_ingest.py`, `ingestion/__main__.py`
+**Survey ingestion:** `alkawarzmi/ingestion/survey_session.py`
 
 #### What it does
 
-1. Loads `.env` (embedding model, paths, chunk config).
+1. Loads `.env` (embedding model, paths, chunk config, vector backend).
 2. Builds a `HuggingFaceEmbeddings` singleton (`intfloat/multilingual-e5-large`, CPU).
 3. For each system (`designer`, `runtime`, `callcenter`, `admin`):
    - Discovers all files under `docs/<system>/` recursively.
@@ -121,9 +149,16 @@ Each system has an isolated Chroma vector store so retrieval is always scoped to
    - Annotates each document with metadata: `system`, `source_file`, `source_rel`, `language`, `ingest_source=folder`.
    - Splits with `RecursiveCharacterTextSplitter` (Arabic-aware separators).
    - Optionally wipes the existing store directory (`INGEST_CLEAN_STORE=true`, default).
-   - Creates a `Chroma.from_documents` persist store.
-4. If `KNOWLEDGE_MONOLITH` is set, loads that markdown into all four collections, de-duplicating previous monolith vectors before re-inserting.
-5. Writes `.metadata.json` to each `vector_stores/<system>/` directory recording the embedding model name, ingest timestamp, and chunk count. At API startup `vector_health.py` reads this file and logs a `WARNING` when the stored model differs from the current `EMBEDDING_MODEL` — preventing silent quality regressions after a model change.
+   - Creates or upserts a persist store in the configured `VECTOR_BACKEND` (Chroma or Qdrant).
+4. If `KNOWLEDGE_MONOLITH` is set, loads that markdown into all four collections.
+5. Writes `.metadata.json` to each `vector_stores/<system>/` directory recording the embedding model name, ingest timestamp, and chunk count. At API startup `framework/vector_health.py` reads this file and logs a `WARNING` when the stored model differs from `EMBEDDING_MODEL`.
+
+#### Survey session ingestion
+
+`alkawarzmi/ingestion/survey_session.py` embeds a live survey's JSON definition into
+a per-survey Chroma collection under `vector_stores/surveys/<id>/`. Triggered via
+`POST /survey/ingest/<survey_id>` and monitored via `GET /survey/status/<survey_id>`.
+Survey stores are always Chroma-only regardless of `VECTOR_BACKEND`.
 
 #### Chunk configuration
 
@@ -141,26 +176,32 @@ Each chunk is tagged `language=ar` if > 20% of characters are Arabic script, els
 
 ### 3.2 LangGraph Agent
 
-**File:** `agent/graph.py`, `agent/nodes.py`, `agent/state.py`
+**Files:** `framework/graph.py`, `framework/nodes/`, `framework/state.py`
 
-The pipeline is a **linear StateGraph** with one conditional branch:
+The pipeline is a **linear StateGraph** with a prescript fast-path and one conditional branch at retrieval:
 
 ```
 START
   │
   ▼
-language_detect_node        — heuristic, no LLM
+language_detect_node         — heuristic, no LLM; script gate blocks unsupported writing systems
   │
   ▼
-rewrite_and_route_node      — 1 LLM call, returns JSON {rewritten_question, system}
+payload_context_node         — zero-LLM prescript from client payload (page_id, survey_id, names)
+  │  prescripted_answer set? ──────────────────────────────────────────────────────► DONE (stream)
   │
   ▼
-retrieval_node              — hybrid dense+BM25+RRF, sets relevance
+rewrite_and_route_node       — 1 LLM call, typo-normalised query → JSON {rewritten_question, system}
+  │
+  ▼
+retrieval_node               — hybrid dense+BM25+RRF, sets relevance
   │
   ├─── relevance=relevant ──► answer_node    (1 LLM call)
   │
   └─── relevance=irrelevant ► fallback_node  (static message, no LLM)
 ```
+
+**Profile injection** — `build_graph(profile)` calls `configure_pipeline(profile)` which injects all business-layer dependencies (prompts, systems list, prescripts function, intent detector, fallback function) into `framework/nodes/pipeline.py` module-level variables. Nodes keep their `(state) -> dict` signature unchanged.
 
 #### AgentState fields
 
@@ -170,31 +211,44 @@ retrieval_node              — hybrid dense+BM25+RRF, sets relevance
 | `language` | `"ar"/"en"/"mixed"` | `language_detect_node` |
 | `rewritten_question` | `str` | `rewrite_and_route_node` |
 | `system` | `str\|None` | `rewrite_and_route_node` — `"none"` for off-topic |
+| `ui_system` | `str\|None` | API (from request context hint) |
 | `retrieved_chunks` | `list[str]` | `retrieval_node` |
 | `retrieved_source_refs` | `list[dict]` | `retrieval_node` |
 | `retrieval_best_distance` | `float\|None` | `retrieval_node` — top-1 L2, logged for tuning |
 | `relevance` | `"relevant"/"irrelevant"/"unknown"` | `retrieval_node` |
 | `answer` | `str` | `answer_node` / `fallback_node` |
+| `prescripted_answer` | `str\|None` | `payload_context_node` — non-None skips LLM entirely |
+| `image_urls` | `list[str]` | `retrieval_node` — UI image carousel (from screens.json) |
 | `thread_id` | `str` | API (resolved before invoke) |
 | `conversation_history` | `list[dict]` | Loaded from memory before invoke |
 | `request_id` | `str` | API middleware |
+| `page_id` | `str\|None` | API (current Angular route from FE) |
+| `survey_id` | `str\|None` | API (active survey from FE) |
+| `user_name_en/ar` | `str` | API (displayed name for personalised greeting) |
+| `is_authenticated` | `bool` | API |
+| `system_language` | `str\|None` | API (UI language preference "en"/"ar") |
+| `survey_context_missing` | `bool` | `payload_context_node` |
+| `survey_ingesting` | `bool` | `payload_context_node` |
+| `survey_vector_context_used` | `bool` | `retrieval_node` |
+| `survey_index_absent` | `bool` | `retrieval_node` |
 
 #### Off-topic routing
 
-When `rewrite_and_route_node` returns `system="none"`, `retrieval_node` immediately returns `relevance="irrelevant"` with empty chunks — no embedding query, no Chroma round-trip, no citations.
+When `rewrite_and_route_node` returns `system="none"`, `retrieval_node` immediately returns `relevance="irrelevant"` with empty chunks — no embedding query, no vector store round-trip, no citations.
 
 ---
 
 ### 3.3 Retrieval Engine
 
-**File:** `agent/retrieval.py`
+**File:** `core/retrieval.py`
 
 #### Hybrid retrieval (default)
 
 ```
-Query
+Query (typo-normalised + Arabic-normalised)
   │
-  ├─► Dense Chroma similarity_search (pool of HYBRID_DENSE_POOL=32 docs)
+  ├─► Dense vector store similarity_search (pool of HYBRID_DENSE_POOL docs)
+  │   Backend: Chroma (local) or Qdrant (remote) — set via VECTOR_BACKEND
   │       └── MMR re-ordering (optional, RETRIEVAL_USE_MMR=true)
   │
   ├─► Language filter (RETRIEVAL_LANG_FILTER=true)
@@ -202,10 +256,12 @@ Query
   │           when filtered pool ≥ RETRIEVAL_TOP_K (skipped for mixed queries)
   │
   ├─► BM25Okapi over the filtered dense pool (in-process, no index rebuild)
-  │       └── Arabic-aware tokenizer: strips diacritics + light morphological
-  │           stemming (prefix/suffix stripping via stem_arabic_token)
+  │       └── Arabic-aware tokenizer: stopword removal, Gulf vocab bridge,
+  │           CAMeL multi-lemma expansion, prefix/suffix stripping
   │
   ├─► RRF fusion (RRF_K=60) → top RETRIEVAL_TOP_K docs
+  │
+  ├─► Optional survey vector store merge (per-survey Chroma, always Chroma)
   │
   └─► Deduplication: near-duplicate chunks (same source_file + first 200 chars)
       are dropped, keeping highest-ranked copy
@@ -213,7 +269,7 @@ Query
 
 #### Optional Cross-encoder re-ranking
 
-Set `RERANK_CROSS_ENCODER_MODEL=cross-encoder/ms-marco-MiniLM-L-6-v2` to enable a third-stage re-rank. This improves precision at the cost of ~100–300 ms load per request and requires `sentence-transformers` (already in `requirements.txt`).
+Set `RERANK_CROSS_ENCODER_MODEL=BAAI/bge-reranker-v2-m3` to enable a third-stage re-rank. Improves precision at the cost of ~100–300 ms per request.
 
 #### Relevance gating
 
@@ -221,8 +277,6 @@ Set `RERANK_CROSS_ENCODER_MODEL=cross-encoder/ms-marco-MiniLM-L-6-v2` to enable 
 1. Zero chunks are returned (empty store or all filtered out).
 2. `RETRIEVAL_RELEVANCE_MAX_L2` is set and the top-1 dense L2 distance exceeds the threshold.
 3. `system="none"` was returned by the router (off-topic).
-
-Without `RETRIEVAL_RELEVANCE_MAX_L2`, cases 1 and 3 are the only hard gates. The LLM grounding prompt (case 2 fallback) handles borderline content at the answer layer.
 
 ---
 
@@ -236,16 +290,20 @@ Without `RETRIEVAL_RELEVANCE_MAX_L2`, cases 1 and 3 are the only hard gates. The
 |--------|------|------|-------------|
 | `GET` | `/health` | none | Liveness — always 200 |
 | `GET` | `/health/ready` | optional (`RAG_HEALTH_READY_KEY`) | Readiness — 503 if stores missing |
-| `GET` | `/metrics` | none | Prometheus exposition format metrics |
+| `GET` | `/metrics` | none | Prometheus exposition format |
+| `GET` | `/llm/config` | none | Active LLM provider, model, Ollama URL |
+| `GET` | `/llm/ollama/models` | none | Models available from local Ollama daemon |
 | `POST` | `/chat` | optional (`RAG_API_KEY`) | SSE token stream |
 | `POST` | `/chat/sync` | optional (`RAG_API_KEY`) | Blocking JSON response |
+| `POST` | `/survey/ingest/{survey_id}` | optional | Embed a live survey into Chroma |
+| `GET` | `/survey/status/{survey_id}` | optional | Ingestion status (`idle`/`ingesting`/`ready`/`error`) |
 
 #### `/chat` — SSE event types
 
 | Event | Payload | When |
 |-------|---------|------|
 | `node_start` | `{"node": "language_detect"}` … | Before each pipeline step |
-| `token` | raw text string | LLM streaming delta (or full fallback string) |
+| `token` | raw text string | LLM streaming delta (or full fallback/prescript string) |
 | `done` | `{"thread_id": "…", "citations": […]}` | Pipeline complete |
 | `blocked` | `{"code": "policy_violation", "reasons": […]}` | Governance rejection |
 | `error` | `{"message": "…"}` | Unhandled exception |
@@ -288,13 +346,13 @@ Set `RAG_API_KEY` to require a credential. Accepted via:
 - `X-API-Key: <key>` header
 - `?api_key=<key>` query param (SSE-friendly)
 
-`/health` and `/health/ready` are always unauthenticated.
+`/health`, `/health/ready`, and `/metrics` are always unauthenticated.
 
 ---
 
 ### 3.5 Thread Memory
 
-**File:** `agent/thread_memory.py`
+**File:** `core/thread_memory.py`
 
 Multi-turn conversation history is stored per `thread_id`. Storage backend is selected automatically:
 
@@ -319,40 +377,43 @@ Up to `MEMORY_MAX_TURNS` (default 10) prior turns are loaded into the prompt pre
 
 ### 3.6 Governance & Guardrails
 
-**File:** `agent/governance.py`
+**File:** `core/governance.py`
 
 Runs **before** the LangGraph graph on every chat request.
 
 #### Checks (in order)
 
 1. **Empty / length** — rejects blanks and questions > `GOVERNANCE_MAX_QUESTION_CHARS` (default 12 000).
-2. **Injection heuristics** — 9 English regex patterns + 6 Arabic patterns for common prompt-override phrases.
-3. **Substring blocklist** — comma-separated `GOVERNANCE_BLOCK_SUBSTRINGS` env var, plus an optional newline file `GOVERNANCE_BLOCKLIST_FILE`.
+2. **Script gate** (`core/query_script_gate.py`) — questions containing non-Latin / non-Arabic characters return a bilingual prescript immediately, skipping governance and LLM entirely.
+3. **Injection heuristics** — 9 English regex patterns + 6 Arabic patterns for common prompt-override phrases.
+4. **Substring blocklist** — comma-separated `GOVERNANCE_BLOCK_SUBSTRINGS` env var, plus an optional newline file `GOVERNANCE_BLOCKLIST_FILE`.
 
 On block: returns HTTP 403 (policy violation) or 422 (too long). Logs prefix + SHA-256 hash of the question to `GOVERNANCE_AUDIT_LOG` (never the full text).
+
+Additionally, `core/governance.py` exports `redact_prompt_injection_spans()` which the pipeline uses to sanitise **retrieved chunks and thread history** before they are inserted into LLM prompts.
 
 **Disable:** `GOVERNANCE_ENABLED=false` skips injection + blocklist checks (length checks still apply when `MAX_QUESTION_CHARS > 0`).
 
 #### Rate limiting
 
-`GOVERNANCE_RATE_LIMIT_PER_MINUTE=60` enables a sliding-window per-client rate limit (keyed by `X-Forwarded-For` → `client.host` fallback). Single-process in-memory for dev; use Redis in production for multi-worker accuracy.
+`GOVERNANCE_RATE_LIMIT_PER_MINUTE=60` enables a sliding-window per-client rate limit (keyed by `X-Forwarded-For` → `client.host` fallback). Single-process in-memory for dev; use Redis for multi-worker accuracy.
 
 ---
 
 ### 3.7 Observability
 
-**File:** `agent/observability.py`
+**File:** `core/observability.py`
 
 #### Log format
 
 **Default (text):**
 ```
-10:32:45 INFO [rid=a3f1…  tid=thread-1] agent.nodes: Node: retrieval + relevance (designer)
+10:32:45 INFO [rid=a3f1…  tid=thread-1] framework.nodes: Node: retrieval + relevance (designer)
 ```
 
 **JSON mode** (`OBSERVABILITY_JSON_STDOUT=true`, for log aggregators):
 ```json
-{"ts":"2026-05-05T10:32:45Z","level":"INFO","logger":"agent.nodes","message":"…","request_id":"a3f1…","thread_id":"thread-1"}
+{"ts":"2026-05-05T10:32:45Z","level":"INFO","logger":"framework.nodes","message":"…","request_id":"a3f1…","thread_id":"thread-1"}
 ```
 
 #### JSONL metrics log
@@ -361,7 +422,7 @@ Set `OBSERVABILITY_METRICS_LOG=./logs/rag_metrics.jsonl` to write one line per c
 
 #### Per-query JSONL
 
-Every query (answer or fallback) appends a line to `logs/queries_YYYY-MM-DD.jsonl` containing all state fields useful for offline eval and tuning, including `retrieval_best_distance`.
+Every query appends a line to `logs/queries_YYYY-MM-DD.jsonl` containing all state fields useful for offline eval and tuning, including `retrieval_best_distance`.
 
 #### Access log
 
@@ -376,21 +437,23 @@ Client sends POST /chat {"question": "كيف أضيف منطق التخطي؟", 
     │
     ├─ Middleware: assign X-Request-ID, bind contextvars, start timer
     │
-    ├─ Governance: check length, injection patterns, blocklist → PASS
+    ├─ Governance: check length, script gate, injection patterns, blocklist → PASS
     │
     ├─ resolve_thread_id("t1") → validated "t1"
     │
     ├─ load_conversation("t1") → last N turns from Redis / file
     │
-    ├─ Build initial AgentState {question, thread_id, conversation_history, request_id}
+    ├─ Build initial AgentState {question, thread_id, conversation_history, request_id,
+    │                             page_id, survey_id, user_name_en/ar, system_language, …}
     │
     ├─ LangGraph invoke:
     │     language_detect → language="ar"
-    │     rewrite_and_route → {rewritten_question="…", system="designer"}
+    │     payload_context → no prescript match (survey_context_missing=false)
+    │     rewrite_and_route (typo-normalised) → {rewritten_question="…", system="designer"}
     │     retrieval → 8 chunks, relevance="relevant", best_l2=0.37
     │     answer → "لإضافة منطق التخطي … [1].\n\n**Sources:** [1]"
     │
-    ├─ SSE stream: node_start×3, token×N, done{citations}
+    ├─ SSE stream: node_start×4, token×N, done{citations}
     │
     ├─ append_turn("t1", question, answer) → persisted to Redis/file
     │
@@ -423,6 +486,9 @@ event: node_start
 data: {"node":"language_detect"}
 
 event: node_start
+data: {"node":"payload_context"}
+
+event: node_start
 data: {"node":"rewrite_and_route"}
 
 event: node_start
@@ -448,12 +514,12 @@ Same request body; returns a single JSON object (see §3.4).
 ### GET /health
 
 ```json
-{"status": "ok", "service": "Al-Khwarizmi AI Assistant"}
+{"status": "ok", "service": "Al-Khawarzmi AI Assistant", "version": "1.0.0"}
 ```
 
 ### GET /health/ready
 
-Optionally protected by `RAG_HEALTH_READY_KEY` (Bearer or `X-API-Key` header). Leave unset for load-balancer probes.
+Optionally protected by `RAG_HEALTH_READY_KEY`. Returns 200 when all catalog stores are present; 503 otherwise.
 
 **200 OK:**
 ```json
@@ -468,46 +534,87 @@ Optionally protected by `RAG_HEALTH_READY_KEY` (Bearer or `X-API-Key` header). L
         "embedding_model": "intfloat/multilingual-e5-large",
         "embedding_model_match": true
       },
-      "runtime":  {"path": "…/runtime", "ready": true, "embedding_model_match": true},
-      "callcenter": {"path": "…/callcenter", "ready": false, "embedding_model": null, "embedding_model_match": null},
-      "admin":    {"path": "…/admin", "ready": false, "embedding_model": null, "embedding_model_match": null}
+      "runtime":    {"ready": true, "embedding_model_match": true},
+      "callcenter": {"ready": false, "embedding_model": null, "embedding_model_match": null},
+      "admin":      {"ready": false, "embedding_model": null, "embedding_model_match": null}
     }
   }
 }
 ```
 
-`embedding_model_match: false` means the store was ingested with a different embedding model — a `WARNING` is also logged at startup. Re-ingest the affected system to fix.
-
-**503 Not Ready** (same body, HTTP 503) — use for Kubernetes readiness probe.
+`embedding_model_match: false` means the store was ingested with a different model — a `WARNING` is logged at startup. Re-ingest the affected system to fix.
 
 ### GET /metrics
 
-Returns Prometheus exposition format text. No authentication. Returns 503 when `prometheus-client` is not installed.
+Prometheus exposition format. No authentication.
 
 ```
 # HELP rag_requests_total Total RAG requests processed
 # TYPE rag_requests_total counter
 rag_requests_total{relevance="relevant",route="ar",system="designer"} 42.0
-# HELP rag_request_duration_seconds End-to-end RAG request duration in seconds
-# TYPE rag_request_duration_seconds histogram
-rag_request_duration_seconds_bucket{le="0.5",route="en"} 3.0
 …
 ```
+
+### GET /llm/config
+
+Returns non-secret LLM settings (provider, resolved model, Ollama base URL).
+
+```json
+{"provider": "anthropic", "model": "claude-haiku-4-5-20251001", "ollama_base_url": null}
+```
+
+### GET /llm/ollama/models
+
+Lists models reported by the local Ollama daemon. Works regardless of `LLM_PROVIDER`.
+
+### POST /survey/ingest/{survey_id}
+
+Triggers background embedding of a live survey JSON into a per-survey Chroma collection
+under `vector_stores/surveys/<id>/`. Returns `{"status": "started"}` immediately.
+
+### GET /survey/status/{survey_id}
+
+Returns the current ingestion status:
+
+```json
+{"survey_id": "123", "status": "ready"}
+```
+
+Status values: `idle` | `ingesting` | `ready` | `error`.
 
 ---
 
 ## 6. Configuration Reference
 
-All settings are read from `.env` at startup via `python-dotenv`.
+All settings are read from `.env` at startup via `python-dotenv`. See `.env.example` for the full annotated reference.
 
-### Required
+### LLM Provider
 
-| Variable | Example | Description |
+| Variable | Default | Description |
 |----------|---------|-------------|
-| `ANTHROPIC_API_KEY` | `sk-ant-…` | Anthropic API credential |
+| `LLM_PROVIDER` | `anthropic` | Chat model vendor: `anthropic`, `openai`, `gemma` (Google AI), `ollama` (local) |
+| `ANTHROPIC_API_KEY` | — | Required when `LLM_PROVIDER=anthropic` |
+| `OPENAI_API_KEY` | — | Required when `LLM_PROVIDER=openai` |
+| `GOOGLE_API_KEY` | — | Required when `LLM_PROVIDER=gemma` |
+| `OLLAMA_BASE_URL` | `http://localhost:11434` | Ollama daemon URL (when `LLM_PROVIDER=ollama`) |
+| `LLM_MODEL` | provider default | Model ID — e.g. `claude-haiku-4-5-20251001`, `gpt-4o-mini`, `gemma-2-9b-it` |
+| `HF_TOKEN` | — | HuggingFace token for private embedding models |
+
+### Embeddings & Vector Stores
+
+| Variable | Default | Description |
+|----------|---------|-------------|
 | `EMBEDDING_MODEL` | `intfloat/multilingual-e5-large` | HuggingFace model for embeddings |
-| `LLM_MODEL` | `claude-haiku-4-5-20251001` | Anthropic model ID |
-| `VECTOR_STORE_PATH` | `./vector_stores` | Root directory for Chroma stores |
+| `VECTOR_STORE_PATH` | `./vector_stores` | Root directory for catalog + survey Chroma stores |
+| `VECTOR_BACKEND` | `chroma` | Catalog vector DB: `chroma` (on-disk) or `qdrant` (remote); survey stores are always Chroma |
+| `QDRANT_URL` | `http://localhost:6333` | Qdrant HTTP API URL (when `VECTOR_BACKEND=qdrant`) |
+| `QDRANT_API_KEY` | — | Qdrant API key |
+| `QDRANT_PREFER_GRPC` | `false` | Use Qdrant gRPC transport |
+
+### Paths & Logging
+
+| Variable | Default | Description |
+|----------|---------|-------------|
 | `LOG_PATH` | `./logs` | Directory for query JSONL logs |
 | `MEMORY_PATH` | `./memory` | Thread memory root (JSON file backend) |
 | `MEMORY_MAX_TURNS` | `10` | Max prior turns in prompt |
@@ -522,7 +629,7 @@ All settings are read from `.env` at startup via `python-dotenv`.
 | `RAG_API_KEY` | _(unset)_ | Bearer/header/query auth for `/chat` and `/chat/sync` |
 | `RAG_HEALTH_READY_KEY` | _(unset)_ | Bearer/header auth for `/health/ready`; leave unset for probes |
 | `RAG_SYSTEMS` | `designer,runtime,callcenter,admin` | Comma-separated system names; add new systems here without code changes |
-| `RAG_REQUIRE_VECTOR_STORES` | `false` | Fail startup if any store missing |
+| `RAG_REQUIRE_VECTOR_STORES` | `false` | Fail startup if any catalog store missing |
 | `APP_VERSION` | _(unset)_ | Shown in `/health` response |
 
 ### Retrieval
@@ -536,12 +643,14 @@ All settings are read from `.env` at startup via `python-dotenv`.
 | `RETRIEVAL_HYBRID` | `true` | Enable BM25+RRF hybrid |
 | `HYBRID_DENSE_POOL` | `32` | Dense candidates before BM25 |
 | `RRF_K` | `60` | RRF rank fusion constant |
-| `RETRIEVAL_LANG_FILTER` | `true` | Drop chunks whose language tag doesn't match query language (Arabic ↔ English); disabled for mixed queries or when filtered pool < `RETRIEVAL_TOP_K` |
-| `RETRIEVAL_RELEVANCE_MAX_L2` | _(unset)_ | L2 distance gate — queries above this threshold return a fallback instead of the LLM; recommended start: `1.2` for e5-normalised embeddings |
+| `RETRIEVAL_LANG_FILTER` | `true` | Drop chunks whose language tag doesn't match query language; disabled for mixed queries or when filtered pool < `RETRIEVAL_TOP_K` |
+| `RETRIEVAL_RELEVANCE_MAX_L2` | _(unset)_ | L2 distance gate — queries above this threshold fall back; recommended: `1.2`–`1.6` for normalised e5-large |
 | `RETRIEVAL_NORMALIZE_AR` | `true` | Normalise Arabic in query before embedding |
-| `RERANK_CROSS_ENCODER_MODEL` | _(unset)_ | Enable cross-encoder re-rank (e.g. `cross-encoder/ms-marco-MiniLM-L-6-v2`) |
+| `RERANK_CROSS_ENCODER_MODEL` | _(unset)_ | Enable cross-encoder re-rank (e.g. `BAAI/bge-reranker-v2-m3`) |
 | `RERANK_POOL` | `16` | Candidates passed to cross-encoder |
 | `RERANK_MAX_CHARS` | `512` | Truncate chunk text before cross-encoder |
+| `RETRIEVAL_MIN_RELEVANT_CHUNKS` | `3` | Min chunks to auto-mark retrieval as relevant (skips L2 gate) |
+| `QUERY_TYPO_BLOCKLIST` | _(unset)_ | Comma-separated Latin tokens to skip English spell-fix (names, brands) |
 
 ### Observability
 
@@ -551,6 +660,7 @@ All settings are read from `.env` at startup via `python-dotenv`.
 | `OBSERVABILITY_JSON_STDOUT` | `false` | JSON log format for aggregators (Loki, CloudWatch, Datadog) |
 | `OBSERVABILITY_METRICS_LOG` | _(unset)_ | Append-only JSONL path for RAG completion events |
 | `APP_VERSION` | _(unset)_ | Release label shown in `/health` response |
+| `OTLP_ENDPOINT` | _(unset)_ | OpenTelemetry gRPC collector (Jaeger, Grafana Tempo, OTel Collector); requires `opentelemetry-*` packages |
 
 ### Governance
 
@@ -561,7 +671,8 @@ All settings are read from `.env` at startup via `python-dotenv`.
 | `GOVERNANCE_BLOCK_SUBSTRINGS` | _(unset)_ | Comma-separated blocked phrases |
 | `GOVERNANCE_BLOCKLIST_FILE` | _(unset)_ | Path to newline-separated blocklist |
 | `GOVERNANCE_AUDIT_LOG` | _(unset)_ | JSONL path for blocked attempts |
-| `GOVERNANCE_RATE_LIMIT_PER_MINUTE` | `60` | Requests/min per client IP (429 on breach); set `0` to disable for local dev. Use Redis (`REDIS_URL`) for multi-worker accuracy. |
+| `GOVERNANCE_RATE_LIMIT_PER_MINUTE` | `60` | Requests/min per client IP (429 on breach); set `0` to disable for local dev |
+| `SAFETY_STRICT` | `false` | When `true`, substitute fallback message if output safety flags are raised |
 
 ### Redis (optional)
 
@@ -575,6 +686,7 @@ All settings are read from `.env` at startup via `python-dotenv`.
 
 | Variable | Default | Description |
 |----------|---------|-------------|
+| `LLM_MAX_TOKENS` | `4096` | Max tokens for final answer |
 | `LLM_MAX_RETRIES` | `3` | Max retry attempts on transient LLM errors |
 | `LLM_RETRY_BASE_SEC` | `0.6` | Exponential backoff base (doubles each attempt) |
 
@@ -582,10 +694,10 @@ All settings are read from `.env` at startup via `python-dotenv`.
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `INGEST_CLEAN_STORE` | `true` | Wipe `vector_stores/<system>/` before each folder re-ingest (idempotent rebuilds) |
+| `INGEST_CLEAN_STORE` | `true` | Wipe `vector_stores/<system>/` before each folder re-ingest |
 | `INGEST_CHUNK_SIZE` | `1100` | Characters per chunk |
 | `INGEST_CHUNK_OVERLAP` | `150` | Overlap between adjacent chunks |
-| `KNOWLEDGE_MONOLITH` | _(unset)_ | Path to a single `.md` file ingested into all system collections simultaneously |
+| `KNOWLEDGE_MONOLITH` | _(unset)_ | Path to a single `.md` ingested into all system collections |
 
 ---
 
@@ -597,6 +709,8 @@ All settings are read from `.env` at startup via `python-dotenv`.
 
 ### OWASP A03 — Injection
 - Governance layer blocks prompt-injection patterns in 9 English + 6 Arabic regexes before the LLM is reached.
+- Script gate (`core/query_script_gate.py`) rejects non-Latin/non-Arabic input before governance runs — no LLM cost.
+- `core/governance.py` exports `redact_prompt_injection_spans()` which sanitises retrieved chunks and thread history before they enter LLM prompts.
 - LLM prompts use explicit governance blocks instructing the model to ignore override attempts.
 - `GOVERNANCE_BLOCKLIST_FILE` allows operators to add site-specific blocked phrases.
 
@@ -623,7 +737,7 @@ All settings are read from `.env` at startup via `python-dotenv`.
 
 ```powershell
 # From project root with venv active
-.\venv\Scripts\python -m uvicorn api.main:app --host 0.0.0.0 --port 8000 --reload
+.\.venv\Scripts\python -m uvicorn api.main:app --host 0.0.0.0 --port 8000 --reload
 ```
 
 Use `--workers 4` (without `--reload`) in production. Set `REDIS_URL` for shared thread memory across workers.
@@ -645,11 +759,47 @@ python -m ingestion designer
 
 Drop files into `docs/<system>/` — any subfolder depth is scanned. Supported formats: `.docx`, `.pdf`, `.txt`, `.md`, `.xlsx`. Re-run `python -m ingestion <system>` after adding files.
 
+### Switching LLM provider
+
+Set `LLM_PROVIDER` in `.env` and the matching API key. No code changes required.
+
+```dotenv
+# Anthropic (default)
+LLM_PROVIDER=anthropic
+ANTHROPIC_API_KEY=sk-ant-…
+LLM_MODEL=claude-haiku-4-5-20251001
+
+# OpenAI
+LLM_PROVIDER=openai
+OPENAI_API_KEY=sk-…
+LLM_MODEL=gpt-4o-mini
+
+# Local Ollama
+LLM_PROVIDER=ollama
+OLLAMA_BASE_URL=http://localhost:11434
+LLM_MODEL=gemma2:9b
+```
+
+### Switching vector store backend
+
+```dotenv
+# Chroma (default, local on-disk)
+VECTOR_BACKEND=chroma
+
+# Qdrant (remote)
+VECTOR_BACKEND=qdrant
+QDRANT_URL=http://localhost:6333
+QDRANT_API_KEY=your-key
+```
+
+Re-run ingestion after changing backend. Survey stores always remain Chroma regardless of this setting.
+
 ### Health checks
 
 ```bash
 curl http://localhost:8000/health
-curl http://localhost:8000/health/ready    # 503 if any store empty
+curl http://localhost:8000/health/ready    # 503 if any catalog store empty
+curl http://localhost:8000/llm/config      # Active provider + model
 ```
 
 ### Log locations
@@ -663,12 +813,12 @@ curl http://localhost:8000/health/ready    # 503 if any store empty
 
 ### Production checklist
 
-- [ ] `ANTHROPIC_API_KEY` set to real key
+- [ ] `ANTHROPIC_API_KEY` (or provider key) set to real key
 - [ ] `RAG_API_KEY` set to a long random secret
 - [ ] `REDIS_URL` set (multi-worker deployments)
 - [ ] `ALLOWED_ORIGINS` restricted to production domains
 - [ ] `RAG_REQUIRE_VECTOR_STORES=true`
-- [ ] `GOVERNANCE_RATE_LIMIT_PER_MINUTE=60` (with Redis)
+- [ ] `GOVERNANCE_RATE_LIMIT_PER_MINUTE=60` (with Redis for multi-worker accuracy)
 - [ ] `GOVERNANCE_AUDIT_LOG=./logs/governance_audit.jsonl`
 - [ ] `OBSERVABILITY_METRICS_LOG=./logs/rag_metrics.jsonl`
 - [ ] `OBSERVABILITY_JSON_STDOUT=true` (if shipping to a log aggregator)
@@ -679,58 +829,112 @@ curl http://localhost:8000/health/ready    # 503 if any store empty
 ## 9. Directory Structure
 
 ```
-RAG/
-├── .env                       # Active secrets (git-ignored)
-├── .env.example               # Full config documentation
+RAG_BE/
+├── .env                         # Active secrets (git-ignored)
+├── .env.example                 # Full config documentation
 ├── requirements.txt
 │
-├── api/
-│   └── main.py                # FastAPI app, lifespan, routes, SSE
+├── core/                        # Layer 1 — reusable services, zero business logic
+│   ├── retrieval.py             # Hybrid dense+BM25+RRF+optional CrossEncoder
+│   ├── text_ar.py               # Arabic script helpers, normalisation, CAMeL lemmatizer
+│   ├── thread_memory.py         # Redis / file thread memory
+│   ├── governance.py            # Input guardrails, rate limit, audit log, redact spans
+│   ├── output_safety.py         # Post-generation safety check
+│   ├── observability.py         # Logging setup, access/metrics helpers, OTel
+│   ├── llm_helpers.py           # LLM + embeddings singletons (provider-selectable)
+│   ├── vector_stores.py         # Catalog vector stores: Chroma or Qdrant
+│   ├── env_utils.py             # env_bool(), EMBEDDING_MODEL, provider helpers
+│   ├── paths.py                 # PROJECT_ROOT, vector_store_root()
+│   ├── greeting_intent.py       # Heuristic is_greeting()
+│   ├── closing_intent.py        # Heuristic is_closing()
+│   ├── client_locale.py         # say(), say_prompt(), ui_reply_language()
+│   ├── session_store.py         # In-memory/Redis ingestion status store
+│   ├── query_script_gate.py     # Block non-Latin/non-Arabic scripts (no LLM)
+│   ├── query_typo_normalize.py  # English spell-fix before rewrite step
+│   ├── ollama_models.py         # List models from local Ollama daemon
+│   └── nodes/
+│       ├── config.py            # Retrieval tuning constants (env-driven)
+│       ├── relevance.py         # Score-based relevance decision
+│       ├── rewrite_parse.py     # JSON parser for route LLM output
+│       └── query_log.py         # JSONL query log appender
 │
-├── agent/
-│   ├── graph.py               # LangGraph StateGraph builder
-│   ├── nodes.py               # All node functions + PRE_ANSWER_PIPELINE
-│   ├── retrieval.py           # Hybrid dense+BM25+RRF+optional CrossEncoder
-│   ├── prompts.py             # All LLM prompt templates
-│   ├── state.py               # AgentState TypedDict
-│   ├── governance.py          # Input guardrails, rate limit, audit log
-│   ├── observability.py       # Logging setup, access/metrics helpers
-│   ├── thread_memory.py       # Redis / file thread memory
-│   ├── paths.py               # PROJECT_ROOT, vector_store_root()
-│   ├── text_ar.py             # Arabic script helpers, normalisation
-│   └── vector_health.py       # Chroma readiness checks
+├── framework/                   # Layer 2 — generic RAG app skeleton
+│   ├── profile.py               # RAGProfile dataclass + Protocol interfaces (THE CONTRACT)
+│   ├── graph.py                 # LangGraph StateGraph builder
+│   ├── state.py                 # AgentState TypedDict
+│   ├── vector_health.py         # Catalog store readiness checks
+│   ├── survey_store.py          # Survey-scoped Chroma client
+│   └── nodes/
+│       ├── pipeline.py          # All node callables + configure_pipeline()
+│       ├── answer_prompt.py     # Prompt assembly + configure_answer_prompt()
+│       ├── intent.py            # is_greeting() + is_platform_overview() delegation
+│       ├── fallback_text.py     # Delegates to profile.fallback
+│       ├── retrieval_step.py    # Hybrid retrieval node + survey merge
+│       └── streaming.py        # SSE token streaming
 │
-├── ingestion/
-│   ├── __main__.py            # CLI entry: python -m ingestion
-│   ├── ingest.py              # main() wiring
-│   ├── chroma_ingest.py       # Chroma persistence logic
-│   ├── documents.py           # File loaders, splitter, language detection
-│   └── config.py              # Env vars for ingestion
+├── alkawarzmi/                  # Layer 3 — Al-Khawarzmi business logic
+│   ├── profile.py               # PROFILE instance — THE SINGLE SWAP POINT
+│   ├── prompts.py               # AlKhawarzmiPrompts adapter
+│   ├── prompt_templates.py      # Raw LLM prompt strings
+│   ├── intents.py               # AlKhawarzmiIntentDetector adapter
+│   ├── fallback.py              # AlKhawarzamiFallback adapter
+│   ├── prescripts.py            # AlKhawarzmiPrescripts adapter
+│   ├── payload_context.py       # Zero-LLM prescript logic (page_id, survey_id, names)
+│   ├── survey_retrieval.py      # Survey vector context hooks
+│   ├── image_selection.py       # Screen image URL mapping
+│   ├── greeting_reply.py        # GREETING_MESSAGE_EN/AR constants
+│   ├── closing_reply.py         # Closing message constants
+│   ├── designer/
+│   │   ├── page_map.py          # Angular route → system/context mapping
+│   │   ├── prescripts.py        # Designer-specific payload prescripts
+│   │   ├── survey_listing_intent.py
+│   │   └── survey_layout_retrieval.py
+│   └── ingestion/
+│       └── survey_session.py    # Embed live survey JSON into per-survey Chroma
+│
+├── api/                         # Thin HTTP layer
+│   ├── deps.py                  # Graph singleton + auth + ChatRequest model
+│   │                            # ← from alkawarzmi.profile import PROFILE  (swap point)
+│   ├── main.py                  # FastAPI app, lifespan, CORS, middleware
+│   └── routers/
+│       ├── chat.py              # POST /chat (SSE) + POST /chat/sync
+│       ├── health.py            # GET /health + GET /health/ready + GET /metrics
+│       ├── llm.py               # GET /llm/config + GET /llm/ollama/models
+│       └── survey.py            # POST /survey/ingest + GET /survey/status
+│
+├── ingestion/                   # Standalone CLI: python -m ingestion [systems…]
+│   ├── __main__.py
+│   ├── ingest.py
+│   ├── chroma_ingest.py
+│   ├── documents.py
+│   └── config.py
 │
 ├── docs/
-│   ├── designer/              # Source documents for designer system
-│   ├── runtime/               # Source documents for runtime system
-│   ├── callcenter/            # Source documents for callcenter system
-│   └── admin/                 # Source documents for admin system
-│
-├── vector_stores/
-│   ├── designer/              # Chroma persist dir (chroma.sqlite3)
+│   ├── designer/                # Source documents for designer system
 │   ├── runtime/
 │   ├── callcenter/
 │   └── admin/
 │
+├── vector_stores/
+│   ├── designer/                # Chroma/Qdrant catalog stores
+│   ├── runtime/
+│   ├── callcenter/
+│   ├── admin/
+│   └── surveys/                 # Per-survey Chroma session stores
+│       └── <survey_id>/
+│
 ├── memory/
-│   └── threads/               # JSON thread history files
+│   └── threads/                 # JSON thread history files
 │
 ├── logs/
 │   └── queries_YYYY-MM-DD.jsonl
 │
 ├── eval/
-│   ├── golden.json            # Ground-truth eval cases
-│   └── run_eval.py            # Offline eval runner
+│   ├── golden.json
+│   └── run_eval.py
 │
 └── tests/
-    └── test_queries.py        # Pytest smoke tests
+    └── test_queries.py
 ```
 
 ---
@@ -740,21 +944,55 @@ RAG/
 ```
 api/main.py
   ├── fastapi, uvicorn, sse-starlette
-  ├── agent.graph           → agent.nodes → agent.retrieval (rank_bm25)
-  │                                       → agent.prompts
-  │                                       → langchain_anthropic
-  │                                       → langchain_chroma (chromadb)
-  │                                       → langchain_community (HuggingFaceEmbeddings)
-  │                                           → sentence-transformers
-  ├── agent.governance      → agent.text_ar
-  ├── agent.observability
-  ├── agent.thread_memory   → redis (optional)
-  └── agent.vector_health   → agent.paths
+  ├── api.deps
+  │     ├── alkawarzmi.profile      → PROFILE (single swap point)
+  │     └── framework.graph
+  │           └── framework.nodes   → core.retrieval (rank_bm25)
+  │                                 → alkawarzmi.prompt_templates (via configure_pipeline)
+  │                                 → core.llm_helpers → langchain_anthropic / langchain_openai
+  │                                                       / langchain_google_genai / langchain_openai[ollama]
+  │                                 → core.vector_stores → langchain_chroma / qdrant_client
+  │                                 → langchain_huggingface (HuggingFaceEmbeddings)
+  │                                     → sentence-transformers
+  ├── core.governance     → core.text_ar
+  ├── core.observability
+  ├── core.thread_memory  → redis (optional)
+  └── framework.vector_health → core.paths
 
 ingestion/
-  ├── langchain_chroma
+  ├── langchain_chroma (or qdrant_client)
   ├── langchain_community (loaders: Docx2txt, PyPDF, TextLoader)
   ├── langchain_text_splitters
   ├── docx2txt, pypdf, openpyxl
-  └── agent.paths, agent.vector_health
+  └── core.paths, core.llm_helpers, framework.vector_health
+
+alkawarzmi.ingestion.survey_session
+  ├── framework.survey_store → langchain_chroma
+  └── core.llm_helpers → HuggingFaceEmbeddings
 ```
+
+---
+
+## 11. Product Swap Guide
+
+The entire Al-Khawarzmi business layer lives in `alkawarzmi/`. To deploy the same
+RAG engine for a different product:
+
+1. Create a new package (e.g. `myproduct/`) mirroring `alkawarzmi/`:
+   - `myproduct/prompts.py` — implement `PromptProvider` protocol
+   - `myproduct/intents.py` — implement `IntentDetector` protocol
+   - `myproduct/fallback.py` — implement `FallbackProvider` protocol
+   - `myproduct/prescripts.py` — implement `PrescriptProvider` protocol
+   - `myproduct/profile.py` — assemble `PROFILE = RAGProfile(...)`
+
+2. Change **one line** in `api/deps.py`:
+   ```python
+   # Before
+   from alkawarzmi.profile import PROFILE as _ACTIVE_PROFILE
+   # After
+   from myproduct.profile import PROFILE as _ACTIVE_PROFILE
+   ```
+
+3. Ingest your product's docs into `docs/` subdirectories, update `RAG_SYSTEMS` in `.env`, and run `python -m ingestion`.
+
+Everything in `core/` and `framework/` is unchanged. `api/` is unchanged.

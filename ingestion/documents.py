@@ -13,7 +13,7 @@ from langchain_community.document_loaders import Docx2txtLoader, PyPDFLoader, Te
 from langchain_core.documents import Document
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 
-from agent.text_ar import arabic_script_ratio
+from core.text_ar import arabic_script_ratio
 from ingestion.config import CHUNK_OVERLAP, CHUNK_SIZE
 
 # Human-readable label for each system collection, used in heading breadcrumbs.

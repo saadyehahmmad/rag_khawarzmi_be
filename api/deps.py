@@ -21,13 +21,18 @@ from typing import Any, Optional
 from fastapi import Depends, Header, HTTPException, Query, Request
 from pydantic import BaseModel, Field
 
-from agent.governance import (
+from core.governance import (
     MAX_QUESTION_CHARS,
     GovernanceOutcome,
     log_blocked_attempt,
     refusal_message_for_outcome,
 )
-from agent.graph import build_graph
+from framework.graph import build_graph
+
+# ---------------------------------------------------------------------------
+# Active RAG profile — swap this import to deploy for a different product.
+# ---------------------------------------------------------------------------
+from alkawarzmi.profile import PROFILE as _ACTIVE_PROFILE
 
 logger = logging.getLogger(__name__)
 
@@ -39,10 +44,10 @@ _compiled_graph: Any = None
 
 
 def get_compiled_graph() -> Any:
-    """Return the singleton LangGraph app, building it on first call."""
+    """Return the singleton LangGraph app, building it on first call with the active profile."""
     global _compiled_graph
     if _compiled_graph is None:
-        _compiled_graph = build_graph()
+        _compiled_graph = build_graph(_ACTIVE_PROFILE)
     return _compiled_graph
 
 
@@ -61,11 +66,29 @@ def dumps(data: Any) -> str:
 # ---------------------------------------------------------------------------
 
 
+class UserName(BaseModel):
+    """Bilingual display name sent by the FE. Both empty means unauthenticated."""
+
+    en: str = ""
+    ar: str = ""
+
+
 class ChatRequest(BaseModel):
     """Inbound chat payload."""
 
     question: str = Field(..., min_length=1)
     thread_id: Optional[str] = None
+    # Context fields — all optional; sent by FE to help the agent understand where the user is.
+    # Survey-related answers (inventory, RAG on the form) expect a full payload each request
+    # (survey_id, page_id, system_language, question); do not rely on thread memory for survey metadata.
+    user_name: Optional[UserName] = None
+    # Designer screen id from the Angular app. ``""`` / missing = Dashboard (`/`);
+    # see ``alkawarzmi/designer/page_map.py`` (synced with ``vector_stores/designer/ROUTES.md``).
+    page_id: Optional[str] = None
+    # survey_id should only be sent when the user has an open survey in the wizard
+    # (e.g. builder, logicPage, design, config, publish).
+    survey_id: Optional[str] = None
+    system_language: Optional[str] = None  # "en" | "ar" — UI language for bilingual survey titles and guidance
 
 
 # ---------------------------------------------------------------------------

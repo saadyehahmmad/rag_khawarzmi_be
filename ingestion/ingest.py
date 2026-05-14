@@ -11,8 +11,8 @@ import os
 import sys
 from pathlib import Path
 
-from agent.paths import PROJECT_ROOT
-from agent.vector_health import SYSTEMS
+from core.paths import PROJECT_ROOT
+from framework.vector_health import SYSTEMS
 
 # config loads .env on import (used by chroma_ingest).
 from ingestion.chroma_ingest import get_embeddings, ingest_system, sync_monolith_to_all_systems

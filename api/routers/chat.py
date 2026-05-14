@@ -16,23 +16,24 @@ from typing import Any, AsyncIterator, Optional, cast
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from sse_starlette.sse import EventSourceResponse
 
-from agent.governance import (
+from core.governance import (
     enforce_rate_limit,
     evaluate_question,
     log_blocked_attempt,
     refusal_message_for_outcome,
 )
-from agent.nodes import (
+from framework.nodes import (
     PRE_ANSWER_PIPELINE,
     append_query_log_entry,
     astream_answer_tokens,
     astream_fallback_tokens,
     route_by_relevance,
 )
-from agent.observability import log_rag_summary, start_span, thread_scope
-from agent.state import AgentState
-from agent.thread_memory import append_turn, load_conversation, resolve_thread_id
-from agent.vector_health import SYSTEMS
+from core.observability import log_rag_summary, start_span, thread_scope
+from framework.state import AgentState
+from core.text_ar import normalize_arabic_answer_text
+from core.thread_memory import append_turn, load_conversation, resolve_thread_id
+from framework.vector_health import SYSTEMS
 from api.deps import (
     ChatRequest,
     dumps,
@@ -57,7 +58,7 @@ def _normalize_api_system(raw: Optional[str]) -> Optional[str]:
     Map the optional ``system`` query parameter to a configured Chroma collection name.
 
     Unknown values are ignored (routing LLM will choose the system). Valid names
-    follow ``RAG_SYSTEMS`` / ``agent.vector_health.SYSTEMS``.
+    follow ``RAG_SYSTEMS`` / :data:`framework.vector_health.SYSTEMS`.
 
     Args:
         raw: Raw query string from the client (e.g. ``"designer"``).
@@ -90,6 +91,12 @@ def _build_initial_state(
 ) -> AgentState:
     """Load thread memory and build the LangGraph input state."""
     history = load_conversation(thread_id)
+
+    user_name = request.user_name
+    user_name_en = (user_name.en or "") if user_name else ""
+    user_name_ar = (user_name.ar or "") if user_name else ""
+    is_authenticated = bool(user_name_en or user_name_ar)
+
     return {
         "question": question,
         "language": "en",
@@ -103,6 +110,17 @@ def _build_initial_state(
         "thread_id": thread_id,
         "conversation_history": history,
         "request_id": request_id,
+        # Client context
+        "page_id": request.page_id or None,
+        "survey_id": request.survey_id or None,
+        "user_name_en": user_name_en,
+        "user_name_ar": user_name_ar,
+        "is_authenticated": is_authenticated,
+        "system_language": request.system_language or None,
+        "survey_context_missing": False,
+        "survey_ingesting": False,
+        "survey_index_absent": False,
+        "survey_vector_context_used": False,
     }
 
 
@@ -296,7 +314,7 @@ async def _sse_stream(
                 answer_parts.append(token)
                 yield {"event": "token", "data": token}
 
-            full_answer = "".join(answer_parts)
+            full_answer = normalize_arabic_answer_text("".join(answer_parts))
             merged["answer"] = full_answer
             append_query_log_entry(cast(AgentState, merged), full_answer, fallback=(branch != "answer"))
 

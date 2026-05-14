@@ -16,7 +16,7 @@ from typing import Any, Optional
 from fastapi import APIRouter, Depends, Header, HTTPException
 from fastapi.responses import Response
 
-from agent.vector_health import all_vector_stores_ready, describe_vector_stores
+from framework.vector_health import all_vector_stores_ready, describe_vector_stores
 from api.deps import resolve_bearer_for_ready
 
 logger = logging.getLogger(__name__)
@@ -66,7 +66,7 @@ def _verify_health_ready_key(
 @router.get("/health/ready")
 def health_ready(_auth: None = Depends(_verify_health_ready_key)) -> dict[str, Any]:
     """
-    Readiness probe: expected Chroma directories exist and look populated.
+    Readiness probe: catalog vector stores exist and look populated (Chroma on disk or Qdrant).
 
     Returns 503 when not ready so orchestrators can keep the pod out of rotation.
     Optionally authenticated via RAG_HEALTH_READY_KEY.

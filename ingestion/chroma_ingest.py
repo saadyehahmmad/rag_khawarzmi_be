@@ -1,13 +1,13 @@
 """
-Chroma persistence: idempotent folder rebuilds and monolith upserts.
+Vector persistence for catalog systems: Chroma on disk or Qdrant (``VECTOR_BACKEND``).
 
 Design goals (ingestion quality):
-- Folder ingest: optional wipe of each system's persist directory before Chroma.from_documents,
+- Folder ingest: optional wipe before ``from_documents``,
   so repeated runs do not accumulate stale or duplicate folder embeddings.
 - Monolith ingest: tag chunks with ingest_source=monolith; before each run, delete all prior
   monolith-tagged rows in that collection, then add_documents. Re-running the monolith step
   no longer duplicates the same markdown across runs.
-  
+
 Metadata contract (helps debugging and future citation UI):
 - ingest_source: "folder" | "monolith"
 - source_file: basename of the file
@@ -24,25 +24,27 @@ from pathlib import Path
 
 from langchain_chroma import Chroma
 from langchain_community.document_loaders import TextLoader
-from langchain_community.embeddings import HuggingFaceEmbeddings
 from langchain_core.documents import Document
+from langchain_huggingface import HuggingFaceEmbeddings
 
-from agent.vector_health import SYSTEMS
+from core.env_utils import env_bool, qdrant_api_key, qdrant_url, vector_backend
+from core.llm_helpers import get_embeddings as core_get_embeddings
+from core.vector_stores import get_qdrant_client_public
+
+from framework.vector_health import SYSTEMS
 from ingestion.config import DOCS_PATH, EMBEDDING_MODEL, VECTOR_STORE_PATH, ingest_clean_store
 from ingestion.documents import build_splitter, detect_language, enrich_with_section_context, load_document
 
 
-
-
 def get_embeddings() -> HuggingFaceEmbeddings:
-    """Shared HuggingFace embedding model (same defaults as agent.nodes)."""
+    """
+    Return the shared HuggingFace embedding singleton (same instance as ``core.llm_helpers``).
+
+    Prints a short CLI hint before the first load (ingestion scripts).
+    """
     print(f"\nLoading embedding model: {EMBEDDING_MODEL}")
     print("(First run may download a large model — please wait.)")
-    return HuggingFaceEmbeddings(
-        model_name=EMBEDDING_MODEL,
-        model_kwargs={"device": "cpu"},
-        encode_kwargs={"normalize_embeddings": True},
-    )
+    return core_get_embeddings()
 
 
 def _remove_store_directory(store_path: Path) -> None:
@@ -107,12 +109,69 @@ def _prune_ingest_source(store: Chroma, ingest_source: str) -> int:
     return total
 
 
+def _write_ingest_metadata(store_dir: Path, system: str, chunk_count: int) -> None:
+    """Write ``.metadata.json`` beside Chroma folders or for Qdrant sidecar metadata under ``store_dir``."""
+    meta_file = store_dir / ".metadata.json"
+    try:
+        store_dir.mkdir(parents=True, exist_ok=True)
+        meta_file.write_text(
+            json.dumps(
+                {
+                    "embedding_model": EMBEDDING_MODEL,
+                    "ingest_time": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                    "chunks": chunk_count,
+                    "system": system,
+                    "vector_backend": vector_backend(),
+                },
+                ensure_ascii=False,
+            ),
+            encoding="utf-8",
+        )
+        print(f"  [DONE] {system} ingested successfully — metadata written to {meta_file.name}")
+    except OSError as exc:
+        print(f"  [WARN] {system} ingested but metadata write failed: {exc}")
+
+
+def _qdrant_prune_ingest_source(system: str, ingest_source: str) -> int:
+    """
+    Delete Qdrant points whose payload marks ``ingest_source`` (LangChain payload layout).
+
+    Tries ``metadata.ingest_source`` then flat ``ingest_source`` so different LC versions still match.
+    """
+    from qdrant_client import models
+
+    client = get_qdrant_client_public()
+    keys = ("metadata.ingest_source", "ingest_source")
+    for key in keys:
+        removed_key = 0
+        while True:
+            flt = models.Filter(
+                must=[models.FieldCondition(key=key, match=models.MatchValue(value=ingest_source))]
+            )
+            points, _next = client.scroll(
+                collection_name=system,
+                scroll_filter=flt,
+                limit=512,
+                offset=None,
+                with_payload=False,
+                with_vectors=False,
+            )
+            if not points:
+                break
+            ids = [p.id for p in points]
+            client.delete(collection_name=system, points_selector=models.PointIdsList(points=ids))
+            removed_key += len(ids)
+        if removed_key:
+            return removed_key
+    return 0
+
+
 def ingest_system(system: str, embeddings: HuggingFaceEmbeddings) -> None:
     """
-    Chunk and embed all files under docs/<system>/ into vector_stores/<system>/.
+    Chunk and embed all files under docs/<system>/ into the catalog vector store.
 
-    When INGEST_CLEAN_STORE is true (default), the target persist directory is removed first
-    so this operation is a full rebuild for that system.
+    When INGEST_CLEAN_STORE is true (default), Chroma removes the persist directory first; Qdrant
+    deletes the collection so this operation is a full rebuild for that system.
     """
     system_docs_path = DOCS_PATH / system
     store_dir = VECTOR_STORE_PATH / system
@@ -157,8 +216,53 @@ def ingest_system(system: str, embeddings: HuggingFaceEmbeddings) -> None:
     chunks = splitter.split_documents(all_docs)
     print(f"\n  Total chunks created: {len(chunks)}")
 
+    backend = vector_backend()
+    print(f"  Storing in vector store ({backend}): {store_path}")
 
-    print(f"  Storing in vector store: {store_path}")
+    if backend == "qdrant":
+        try:
+            from langchain_qdrant import QdrantVectorStore
+        except ImportError as exc:  # pragma: no cover
+            raise ImportError(
+                "VECTOR_BACKEND=qdrant requires langchain-qdrant and qdrant-client (see requirements.txt)."
+            ) from exc
+
+        client = get_qdrant_client_public()
+        if ingest_clean_store():
+            print("  [CLEAN] Deleting Qdrant collection (INGEST_CLEAN_STORE=true).")
+            try:
+                client.delete_collection(system)
+            except Exception:
+                pass
+        else:
+            print("  [INFO] INGEST_CLEAN_STORE=false — appending when the Qdrant collection already exists.")
+
+        store_dir.mkdir(parents=True, exist_ok=True)
+        q_kw: dict = {
+            "embedding": embeddings,
+            "collection_name": system,
+            "url": qdrant_url(),
+        }
+        api_key = qdrant_api_key()
+        if api_key:
+            q_kw["api_key"] = api_key
+        if env_bool("QDRANT_PREFER_GRPC", False):
+            q_kw["prefer_grpc"] = True
+
+        collection_exists = False
+        try:
+            client.get_collection(system)
+            collection_exists = True
+        except Exception:
+            collection_exists = False
+
+        if collection_exists and not ingest_clean_store():
+            db = QdrantVectorStore(client=client, collection_name=system, embedding=embeddings)
+            db.add_documents(chunks)
+        else:
+            QdrantVectorStore.from_documents(documents=chunks, **q_kw)
+        _write_ingest_metadata(store_dir, system, len(chunks))
+        return
 
     if ingest_clean_store():
         print("  [CLEAN] Removing existing store directory (INGEST_CLEAN_STORE=true).")
@@ -171,24 +275,7 @@ def ingest_system(system: str, embeddings: HuggingFaceEmbeddings) -> None:
         persist_directory=store_path,
         collection_name=system,
     )
-    # Write embedding model metadata so vector_health can detect mismatches at startup.
-    meta_file = store_dir / ".metadata.json"
-    try:
-        meta_file.write_text(
-            json.dumps(
-                {
-                    "embedding_model": EMBEDDING_MODEL,
-                    "ingest_time": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-                    "chunks": len(chunks),
-                    "system": system,
-                },
-                ensure_ascii=False,
-            ),
-            encoding="utf-8",
-        )
-        print(f"  [DONE] {system} ingested successfully — metadata written to {meta_file.name}")
-    except OSError as exc:
-        print(f"  [WARN] {system} ingested but metadata write failed: {exc}")
+    _write_ingest_metadata(store_dir, system, len(chunks))
 
 
 def sync_monolith_to_all_systems(embeddings: HuggingFaceEmbeddings, monolith_path: Path) -> None:
@@ -233,6 +320,23 @@ def sync_monolith_to_all_systems(embeddings: HuggingFaceEmbeddings, monolith_pat
             meta["system"] = system
             meta["ingest_source"] = "monolith"
             chunks.append(Document(page_content=c.page_content, metadata=meta))
+
+        if vector_backend() == "qdrant":
+            try:
+                from langchain_qdrant import QdrantVectorStore
+            except ImportError as exc:  # pragma: no cover
+                raise ImportError(
+                    "VECTOR_BACKEND=qdrant requires langchain-qdrant and qdrant-client (see requirements.txt)."
+                ) from exc
+
+            client = get_qdrant_client_public()
+            db = QdrantVectorStore(client=client, collection_name=system, embedding=embeddings)
+            removed = _qdrant_prune_ingest_source(system, "monolith")
+            if removed:
+                print(f"  [PRUNE] {system}: removed {removed} prior monolith chunk(s)")
+            db.add_documents(chunks)
+            print(f"  [DONE] monolith upserted -> {system}")
+            continue
 
         db = Chroma(
             persist_directory=store_path,

@@ -36,7 +36,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-# Repository root on sys.path so `agent` imports resolve when run as a file.
+# Repository root on sys.path so package imports resolve when run as a file.
 _ROOT = Path(__file__).resolve().parents[1]
 if str(_ROOT) not in sys.path:
     sys.path.insert(0, str(_ROOT))
@@ -45,7 +45,7 @@ from dotenv import load_dotenv
 
 load_dotenv(_ROOT / ".env")
 
-from agent.graph import build_graph
+from framework.graph import build_graph
 
 
 def _load_golden(path: Path) -> dict[str, Any]:
